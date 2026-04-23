@@ -12,7 +12,6 @@ permissions:
 
 env:
   REGISTRY_GHCR: ghcr.io
-  REGISTRY_DOCKERHUB: docker.io
   IMAGE_NAME: ${{ github.repository }}   # e.g. mikechambers/vpn-rebind
 
 jobs:
@@ -24,6 +23,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ── Test ─────────────────────────────────────────────────────────────
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test -race ./...
+
       # ── Docker metadata ──────────────────────────────────────────────────
       - name: Extract metadata
         id: meta
@@ -31,7 +39,6 @@ jobs:
         with:
           images: |
             ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}
-            ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}
           tags: |
             # Full semver tag: v1.2.3
             type=semver,pattern={{version}}
@@ -59,15 +66,6 @@ jobs:
           registry: ${{ env.REGISTRY_GHCR }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        # Skip if DOCKERHUB_TOKEN is not set (GHCR-only deployments).
-        if: ${{ secrets.DOCKERHUB_TOKEN != '' }}
-        with:
-          registry: ${{ env.REGISTRY_DOCKERHUB }}
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # ── Build & push ─────────────────────────────────────────────────────
       - name: Build and push
@@ -106,5 +104,3 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          body_path: ${{ github.workspace }}/CHANGELOG.md
-        continue-on-error: true   # body_path is optional; release still creates if file absent
