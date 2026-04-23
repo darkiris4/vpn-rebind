@@ -1,0 +1,86 @@
+---
+# Example Docker Compose stack showing vpn-rebind as a drop-in control-plane
+# sidecar alongside Gluetun and a set of VPN-dependent services.
+#
+# Key points:
+#  • vpn-rebind mounts the Docker socket read-only — it only needs to watch
+#    events and recreate containers; it never modifies images or volumes.
+#  • The config file is mounted from ./vpn-rebind/config.yaml (or omit it
+#    entirely and use the VPN_REBIND_* environment variables shown below).
+#  • Dependent services set  network_mode: "container:gluetun"  so all their
+#    traffic is routed through Gluetun's network namespace.
+#  • Label  vpn.provider=gluetun  opts a service into automatic label-based
+#    discovery (in addition to the explicit list in the config file).
+
+services:
+
+  # ── VPN provider ───────────────────────────────────────────────────────────
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun          # Must match config.yaml provider value.
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - VPN_SERVICE_PROVIDER=mullvad
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
+      - SERVER_CITIES=Amsterdam
+    ports:
+      # Expose ports here — NOT on the dependent containers.
+      - "8080:8080"   # qBittorrent web UI
+      - "9696:9696"   # Prowlarr
+    restart: unless-stopped
+
+  # ── vpn-rebind control plane ───────────────────────────────────────────────
+  vpn-rebind:
+    image: ghcr.io/mikechambers/vpn-rebind:latest
+    container_name: vpn-rebind
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./vpn-rebind:/config:ro          # Mount config directory (optional).
+    environment:
+      - VPN_REBIND_LOG_LEVEL=info
+      # Uncomment to use env-only config (no file needed):
+      # - VPN_REBIND_PROVIDER=gluetun
+      # - VPN_REBIND_DEPENDENTS=qbittorrent,prowlarr
+      # - VPN_REBIND_DELAY=5s
+    depends_on:
+      - gluetun
+
+  # ── VPN-dependent services ─────────────────────────────────────────────────
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    network_mode: "container:gluetun"   # Share Gluetun's network namespace.
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - WEBUI_PORT=8080
+    volumes:
+      - ./qbittorrent/config:/config
+      - ./downloads:/downloads
+    restart: unless-stopped
+    labels:
+      vpn.required: "true"              # Opt in to label-based discovery.
+      vpn.provider: gluetun
+    depends_on:
+      - gluetun
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    network_mode: "container:gluetun"
+    environment:
+      - PUID=1000
+      - PGID=1000
+    volumes:
+      - ./prowlarr/config:/config
+    restart: unless-stopped
+    labels:
+      vpn.required: "true"
+      vpn.provider: gluetun
+    depends_on:
+      - gluetun

@@ -1,0 +1,51 @@
+# vpn-rebind configuration reference
+# Mount this file to /config/config.yaml inside the container, or point
+# CONFIG_PATH to a different location.
+#
+# All top-level scalar fields can also be set via environment variables
+# (see README for the full env var reference).
+
+# How long to wait after the VPN provider container starts before rebinding
+# its dependents. This gives the provider time to establish the tunnel and
+# fully initialise its network namespace before other containers attach.
+# Default: 3s
+rebind_delay: 5s
+
+# Graceful stop timeout sent to each dependent container before force-removal.
+# Default: 10s
+stop_timeout: 10s
+
+# Log verbosity: debug | info | warn | error
+# Default: info
+log_level: info
+
+# One or more VPN namespace groups. Each group has exactly one provider
+# (the container whose network namespace dependents share) and one or more
+# ways to discover dependents.
+groups:
+
+  # ── Single-provider example ───────────────────────────────────────────────
+  - name: gluetun            # Human-readable label used in log output.
+    provider: gluetun        # Exact Docker container name of the VPN provider.
+
+    # Explicit list of dependent container names.
+    # These containers use  network_mode: "container:gluetun"  in Compose.
+    dependents:
+      - qbittorrent
+      - prowlarr
+      - flaresolverr
+
+    # Dynamic discovery via Docker labels — picks up any container with ALL
+    # of the listed labels set to the given values.
+    # Leave the value empty ("") to match any container that has the label key.
+    label_selector:
+      vpn.required: "true"
+      vpn.provider: gluetun
+
+  # ── Second provider on the same host ─────────────────────────────────────
+  # - name: wg-personal
+  #   provider: wireguard
+  #   dependents:
+  #     - personal-torrent
+  #   label_selector:
+  #     vpn.provider: wireguard
