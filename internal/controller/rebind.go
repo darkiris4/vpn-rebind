@@ -143,7 +143,7 @@ func (r *Rebirder) rebindContainer(ctx context.Context, containerName, providerN
 
 	hostCfg := cloneHostConfig(info.HostConfig, providerName)
 	netCfg := buildNetworkingConfig(info)
-	containerCfg := info.Config
+	containerCfg := cloneContainerConfig(info.Config, hostCfg)
 	name := stripSlash(info.Name)
 
 	// 2. Stop gracefully.
@@ -174,6 +174,21 @@ func (r *Rebirder) rebindContainer(ctx context.Context, containerName, providerN
 
 	log.Info("container rebound successfully", "new_id", resp.ID[:12])
 	return nil
+}
+
+// cloneContainerConfig returns a shallow copy of cfg. When the network mode is
+// container:*, Hostname and Domainname are cleared — Docker rejects those fields
+// when the container shares another container's network namespace.
+func cloneContainerConfig(cfg *container.Config, hc *container.HostConfig) *container.Config {
+	if cfg == nil {
+		return nil
+	}
+	copy := *cfg
+	if hc != nil && strings.HasPrefix(string(hc.NetworkMode), "container:") {
+		copy.Hostname = ""
+		copy.Domainname = ""
+	}
+	return &copy
 }
 
 // cloneHostConfig returns a shallow copy of hc with the NetworkMode normalised
