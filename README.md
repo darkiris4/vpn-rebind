@@ -31,7 +31,7 @@ The controller starts **without** performing any rebind. It only acts after it h
 ```yaml
 services:
   vpn-rebind:
-    image: ghcr.io/mikechambers/vpn-rebind:latest
+    image: ghcr.io/darkiris4/vpn-rebind:latest
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -61,7 +61,7 @@ groups:
 ```yaml
 services:
   vpn-rebind:
-    image: ghcr.io/mikechambers/vpn-rebind:latest
+    image: ghcr.io/darkiris4/vpn-rebind:latest
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -167,8 +167,7 @@ make image-multiarch
 
 Images are published automatically on every `v*.*.*` tag via GitHub Actions to:
 
-- `ghcr.io/mikechambers/vpn-rebind:<version>`
-- `docker.io/mikechambers/vpn-rebind:<version>` *(if DOCKERHUB_TOKEN secret is set)*
+- `ghcr.io/darkiris4/vpn-rebind:<version>`
 
 Tags follow [semver](https://semver.org/): `v1.2.3`, `v1.2`, `v1`, and `latest` are published simultaneously.
 

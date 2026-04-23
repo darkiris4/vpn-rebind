@@ -1,5 +1,5 @@
 BINARY     := vpn-rebind
-IMAGE      := ghcr.io/mikechambers/vpn-rebind
+IMAGE      := ghcr.io/darkiris4/vpn-rebind
 VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 PLATFORMS  := linux/amd64,linux/arm64,linux/arm/v7
 
