@@ -1,5 +1,7 @@
 # vpn-rebind
 
+> When your VPN container restarts, any containers routing through it silently lose their VPN protection — they keep running but their traffic is no longer tunneled. **vpn-rebind** detects the restart and automatically recreates those containers so they reconnect to the VPN. No manual intervention, no missed restarts, no accidental traffic leaks.
+
 An event-driven Docker control-plane controller that enforces VPN network namespace correctness for container groups.
 
 When a VPN provider container (e.g. [Gluetun](https://github.com/qdm12/gluetun)) restarts, its Linux network namespace is replaced. Dependent containers that were attached via `network_mode: container:<provider>` are now silently orphaned in a stale namespace. **vpn-rebind** watches for this event and deterministically recreates each dependent container so it attaches to the fresh namespace — no health-check polling, no manual restarts, no silent fallback to host networking.
