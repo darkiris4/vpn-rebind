@@ -1,6 +1,6 @@
 module github.com/mikechambers/vpn-rebind
 
-go 1.22
+go 1.22.0
 
 require (
 	github.com/docker/docker v27.3.1+incompatible
