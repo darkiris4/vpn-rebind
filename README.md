@@ -1,45 +1,39 @@
 # vpn-rebind
 
-> When your VPN container restarts, any containers routing through it silently lose their VPN protection — they keep running but their traffic is no longer tunneled. **vpn-rebind** detects the restart and automatically recreates those containers so they reconnect to the VPN. No manual intervention, no missed restarts, no accidental traffic leaks.
+**Automatically recreates containers so they reattach to their VPN network namespace after a provider restart.**
 
-An event-driven Docker control-plane controller that enforces VPN network namespace correctness for container groups.
+<!-- Replace with an actual recording once you have one -->
+<!-- ![vpn-rebind demo](docs/demo.gif) -->
 
-When a VPN provider container (e.g. [Gluetun](https://github.com/qdm12/gluetun)) restarts, its Linux network namespace is replaced. Dependent containers that were attached via `network_mode: container:<provider>` are now silently orphaned in a stale namespace. **vpn-rebind** watches for this event and deterministically recreates each dependent container so it attaches to the fresh namespace — no health-check polling, no manual restarts, no silent fallback to host networking.
+[![GitHub release](https://img.shields.io/github/v/release/darkiris4/vpn-rebind)](https://github.com/darkiris4/vpn-rebind/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## How it works
+---
 
-```
-Docker daemon ──events──► vpn-rebind controller
-                               │
-                  provider die │ → mark group "needs rebind"
-                  provider start│ → schedule debounced rebind
-                               │
-                         [rebind_delay]
-                               │
-                        for each dependent:
-                          stop → remove → recreate → start
-                               │
-                        (NetworkMode normalised from
-                         container:<old-id>  →  container:<name>
-                         so Docker resolves to new namespace)
-```
+## The problem
 
-The controller starts **without** performing any rebind. It only acts after it has observed a provider go down **and** come back up, so a normal `docker compose up` startup is unaffected.
+When a VPN container (like Gluetun) restarts, Linux replaces its network namespace. Docker does not dynamically reattach containers to a replaced network namespace. Any containers sharing it via `network_mode: "container:gluetun"` keep running — but their network namespace is now invalid. Traffic either breaks entirely or bypasses the VPN depending on firewall configuration — in both cases, the container is no longer operating as intended.
 
-## Quick start
+Health checks won't catch it. Compose restart policies won't fix it. The only reliable fix in Docker today is to stop, remove, and recreate each dependent container so it attaches to the new namespace.
 
-### Environment variables (no config file needed)
+**vpn-rebind does that automatically**, with no polling and no manual steps.
+
+---
+
+## Quickstart
+
+Add one service to your existing `docker-compose.yml`:
 
 ```yaml
 services:
   vpn-rebind:
-    container_name: vpn-rebind
     image: ghcr.io/darkiris4/vpn-rebind:latest
+    container_name: vpn-rebind
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
-      - "999"                    # docker group — grants socket access without root
+      - "999"                    # docker group GID — verify: getent group docker
     environment:
       - VPN_REBIND_PROVIDER=gluetun
       - VPN_REBIND_DEPENDENTS=qbittorrent,prowlarr
@@ -50,12 +44,69 @@ services:
       - ALL
 ```
 
-### YAML config file
+That's it. Change `gluetun`, `qbittorrent`, and `prowlarr` to your container names, then `docker compose up -d vpn-rebind`.
 
-Mount a config file to `/config/config.yaml`:
+> **Requirement:** Dependent containers must use `network_mode: "container:<vpn>"`. vpn-rebind only fixes namespace attachment — it has no effect on bridge-networked containers.
+
+> **Note:** The socket mount needs write access (no `:ro`) so vpn-rebind can stop and recreate containers.
+
+For a complete working stack (Gluetun + qBittorrent + Prowlarr), see [`docker-compose.example.yml`](docker-compose.example.yml).
+
+---
+
+## Do you need this?
+
+You likely need vpn-rebind if:
+
+- You use `network_mode: "container:gluetun"` (or any other VPN provider)
+- Your VPN container restarts occasionally — on update, crash, or reconnect
+- You've noticed any of these symptoms after a VPN restart:
+  - torrents stalling until you manually restart qBittorrent
+  - indexers timing out until containers are bounced
+  - services that "just start working again" after a manual restart
+
+If you've ever fixed your stack by restarting dependent containers after a VPN reconnect — this tool automates that.
+
+---
+
+## Why vpn-rebind instead of X?
+
+| Approach | Why it falls short |
+|---|---|
+| **Do nothing** | Dependent containers keep running in a stale/invalid namespace after every provider restart |
+| **Restart policies** | Docker only restarts *stopped* containers — dependents keep running, silently broken |
+| **`depends_on` in Compose** | Only controls startup order; does nothing when a dependency restarts mid-run |
+| **`docker compose up -d --force-recreate`** | Requires manual intervention or external automation; not event-driven |
+| **Health checks** | Need a custom script per container to detect the namespace change and trigger a recreate — fragile and duplicated |
+| **Watchtower** | Watches for image updates, not network namespace events |
+| **Cron / polling scripts** | Polling adds latency; you're reimplementing this tool with more failure modes |
+| **vpn-rebind** | Event-driven, debounced, zero config for simple setups, no polling, no scripts |
+
+vpn-rebind starts without acting — a clean `docker compose up` does not trigger spurious rebinds.
+
+---
+
+## Configuration
+
+### Environment variables (simplest, no file needed)
+
+| Variable | Description | Default |
+|---|---|---|
+| `VPN_REBIND_PROVIDER` | VPN provider container name | — |
+| `VPN_REBIND_DEPENDENTS` | Comma-separated dependent names: `qbittorrent,prowlarr` | — |
+| `VPN_REBIND_LABEL_SELECTOR` | Discover dependents by label: `vpn.required=true,vpn.provider=gluetun` | — |
+| `VPN_REBIND_DELAY` | Wait after provider starts before rebinding (e.g. `5s`) | `3s` |
+| `VPN_REBIND_STOP_TIMEOUT` | Graceful stop timeout per dependent | `10s` |
+| `VPN_REBIND_LOG_LEVEL` | `debug` \| `info` \| `warn` \| `error` | `info` |
+
+### YAML config file (for multiple providers or advanced use)
+
+Mount a file to `/config/config.yaml`:
 
 ```yaml
 rebind_delay: 5s
+stop_timeout: 10s
+log_level: info
 
 groups:
   - name: gluetun
@@ -63,54 +114,29 @@ groups:
     dependents:
       - qbittorrent
       - prowlarr
-    label_selector:
+    label_selector:         # discover additional dependents by label
       vpn.required: "true"
       vpn.provider: gluetun
+
+  - name: wireguard         # second provider on the same host
+    provider: wireguard
+    label_selector:
+      vpn.provider: wireguard
 ```
+
+Then mount the config directory:
 
 ```yaml
-services:
-  vpn-rebind:
-    image: ghcr.io/darkiris4/vpn-rebind:latest
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./vpn-rebind:/config:ro
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock
+  - ./vpn-rebind:/config:ro
 ```
 
-See [`config.example.yaml`](config.example.yaml) for all options and [`docker-compose.example.yml`](docker-compose.example.yml) for a full Gluetun + qBittorrent + Prowlarr stack.
+See [`config.example.yaml`](config.example.yaml) for all options.
 
-## Configuration reference
+### Label-based discovery
 
-### YAML fields
-
-| Field | Default | Description |
-|---|---|---|
-| `rebind_delay` | `3s` | How long to wait after the provider starts before rebinding. Gives the VPN tunnel time to establish. |
-| `stop_timeout` | `10s` | Graceful stop timeout before force-removing each dependent. |
-| `log_level` | `info` | Verbosity: `debug` \| `info` \| `warn` \| `error` |
-| `groups[].name` | required | Human-readable label shown in log output. |
-| `groups[].provider` | required | Exact Docker container name of the VPN provider. Must match `container_name:` in Compose. |
-| `groups[].dependents` | | Explicit list of dependent container names. |
-| `groups[].label_selector` | | Discover dependents dynamically by matching Docker labels. All key=value pairs must match. |
-
-At least one of `dependents` or `label_selector` is required per group.
-
-### Environment variables
-
-| Variable | Equivalent YAML | Notes |
-|---|---|---|
-| `CONFIG_PATH` | — | Path to config file. Default: `/config/config.yaml` |
-| `VPN_REBIND_PROVIDER` | `groups[0].provider` | Defines a single `default` group when no config file is present. |
-| `VPN_REBIND_DEPENDENTS` | `groups[0].dependents` | Comma-separated list: `qbittorrent,prowlarr` |
-| `VPN_REBIND_LABEL_SELECTOR` | `groups[0].label_selector` | Comma-separated key=value pairs: `vpn.required=true,vpn.provider=gluetun` |
-| `VPN_REBIND_DELAY` | `rebind_delay` | Duration string: `5s`, `10s` |
-| `VPN_REBIND_STOP_TIMEOUT` | `stop_timeout` | Duration string |
-| `VPN_REBIND_LOG_LEVEL` | `log_level` | `debug` \| `info` \| `warn` \| `error` |
-
-### Label-based opt-in
-
-Add labels to dependent containers for automatic discovery:
+Add labels to dependent containers to have vpn-rebind discover them automatically without listing names explicitly:
 
 ```yaml
 services:
@@ -120,81 +146,65 @@ services:
       vpn.provider: gluetun
 ```
 
-Labels can be combined with the explicit `dependents` list — the controller deduplicates.
+Labels and the explicit `dependents` list are combined and deduplicated.
 
-### Multiple providers
+---
 
-```yaml
-groups:
-  - name: gluetun
-    provider: gluetun
-    dependents: [qbittorrent, prowlarr]
+## How it works
 
-  - name: wireguard
-    provider: wireguard
-    label_selector:
-      vpn.provider: wireguard
+```
+Docker daemon ──events──► vpn-rebind
+                               │
+                  provider die │ → mark group "needs rebind"
+                  provider start│ → schedule debounced rebind (after rebind_delay)
+                               │
+                        for each dependent:
+                          stop → remove → recreate → start
 ```
 
-## Docker permissions
+vpn-rebind only acts after it has observed a provider go down **and** then come back up. A clean `docker compose up` at startup does nothing.
 
-vpn-rebind needs read-write access to the Docker socket to stop, remove, and recreate containers. Mount it without `:ro`:
+**The key step:** after Docker creates a container, `NetworkMode` is stored as `container:<id>` — a stale ID once the provider restarts. Before recreating each dependent, vpn-rebind rewrites this to `container:<provider-name>` so Docker resolves it to the provider's current running instance. Without this, recreated containers would attach to a non-existent namespace.
 
-```yaml
-volumes:
-  - /var/run/docker.sock:/var/run/docker.sock
-```
-
-The image runs as a non-root user. To grant socket access without running as root, add the host's `docker` group GID (typically `999`, verify with `getent group docker`):
-
-```yaml
-group_add:
-  - "999"
-```
-
-The container has no need for any Linux capabilities or a writable filesystem, so it can be locked down fully:
-
-```yaml
-read_only: true
-security_opt:
-  - no-new-privileges:true
-cap_drop:
-  - ALL
-```
+---
 
 ## Docker Compose compatibility
 
-vpn-rebind recreates containers directly via the Docker API, preserving the full `ContainerConfig` and `HostConfig` from the original container. This means:
+vpn-rebind preserves the full `ContainerConfig` and `HostConfig` when recreating containers (env vars, mounts, labels, restart policy — all kept). The one side-effect: after a recreate, Compose will detect a config hash mismatch and offer to reconcile on the next `docker compose up -d`. That's a one-time, harmless sync.
 
-- All environment variables, volume mounts, labels, and restart policies are preserved.
-- After vpn-rebind recreates a container, `docker compose up` will detect a config hash mismatch (because the Compose hash label was set at original creation time). Running `docker compose up -d` will reconcile this by recreating the container once more under Compose management.
-- This is a one-time reconciliation cost after a VPN provider restart event; normal operations are unaffected.
+---
+
+## Security considerations
+
+vpn-rebind requires read-write access to the Docker socket to stop, remove, and recreate containers. This grants significant control over Docker on the host — treat it the same as any other privileged service.
+
+The container itself is locked down:
+
+- Runs as a non-root user
+- Read-only filesystem (`read_only: true`)
+- No Linux capabilities (`cap_drop: ALL`)
+- No privilege escalation (`no-new-privileges:true`)
+
+Only deploy in environments where you trust the image source. The `group_add: "999"` pattern grants socket access via group membership rather than running as root.
+
+---
+
+## Design goals
+
+- **Event-driven** — no polling; acts on Docker events only
+- **Idempotent** — safe across restarts; cold-start does not trigger rebinds
+- **Minimal privileges** — non-root, no capabilities, read-only filesystem
+- **No Compose dependency** — works with any Docker setup, not just Compose stacks
+
+---
 
 ## Building from source
 
-```sh
-# Requires Go 1.22+
-go mod tidy
-make build
-
-# Build Docker image
-make image
-
-# Multi-arch push (requires buildx)
-make image-multiarch
-```
-
-## Releases
-
-Images are published automatically on every `v*.*.*` tag via GitHub Actions to:
-
-- `ghcr.io/darkiris4/vpn-rebind:<version>`
-
-Tags follow [semver](https://semver.org/): `v1.2.3`, `v1.2`, `v1`, and `latest` are published simultaneously.
-
-To publish a release:
+Requires Go 1.22+.
 
 ```sh
-git tag v1.0.0
-git push origin v1.0.0
+make build          # → bin/vpn-rebind
+make test           # go test -race ./...
+make image          # local Docker image
+make image-multiarch # multi-arch push (requires buildx)
 ```
