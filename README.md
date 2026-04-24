@@ -33,13 +33,21 @@ The controller starts **without** performing any rebind. It only acts after it h
 ```yaml
 services:
   vpn-rebind:
+    container_name: vpn-rebind
     image: ghcr.io/darkiris4/vpn-rebind:latest
     restart: unless-stopped
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "999"                    # docker group — grants socket access without root
     environment:
       - VPN_REBIND_PROVIDER=gluetun
       - VPN_REBIND_DEPENDENTS=qbittorrent,prowlarr
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 ```
 
 ### YAML config file
@@ -130,18 +138,29 @@ groups:
 
 ## Docker permissions
 
-vpn-rebind needs read-write access to the Docker socket to watch events and recreate containers:
+vpn-rebind needs read-write access to the Docker socket to stop, remove, and recreate containers. Mount it without `:ro`:
 
 ```yaml
 volumes:
-  - /var/run/docker.sock:/var/run/docker.sock:ro   # :ro is sufficient for event watching
+  - /var/run/docker.sock:/var/run/docker.sock
 ```
 
-> **Note:** `:ro` prevents vpn-rebind from creating new containers. For full rebind functionality, mount the socket **without** `:ro`:
-> ```yaml
-> volumes:
->   - /var/run/docker.sock:/var/run/docker.sock
-> ```
+The image runs as a non-root user. To grant socket access without running as root, add the host's `docker` group GID (typically `999`, verify with `getent group docker`):
+
+```yaml
+group_add:
+  - "999"
+```
+
+The container has no need for any Linux capabilities or a writable filesystem, so it can be locked down fully:
+
+```yaml
+read_only: true
+security_opt:
+  - no-new-privileges:true
+cap_drop:
+  - ALL
+```
 
 ## Docker Compose compatibility
 
