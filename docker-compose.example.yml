@@ -3,8 +3,10 @@
 # sidecar alongside Gluetun and a set of VPN-dependent services.
 #
 # Key points:
-#  • vpn-rebind mounts the Docker socket read-only — it only needs to watch
-#    events and recreate containers; it never modifies images or volumes.
+#  • vpn-rebind needs read-write access to the Docker socket to stop, remove,
+#    and recreate dependent containers when the VPN provider restarts.
+#  • group_add: "999" grants docker socket access without running as root.
+#    Verify your docker group GID with: getent group docker
 #  • The config file is mounted from ./vpn-rebind/config.yaml (or omit it
 #    entirely and use the VPN_REBIND_* environment variables shown below).
 #  • Dependent services set  network_mode: "container:gluetun"  so all their
@@ -35,18 +37,25 @@ services:
 
   # ── vpn-rebind control plane ───────────────────────────────────────────────
   vpn-rebind:
-    image: ghcr.io/mikechambers/vpn-rebind:latest
+    image: ghcr.io/darkiris4/vpn-rebind:latest
     container_name: vpn-rebind
     restart: unless-stopped
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock
       - ./vpn-rebind:/config:ro          # Mount config directory (optional).
+    group_add:
+      - "999"                            # docker group GID — check with: getent group docker
     environment:
       - VPN_REBIND_LOG_LEVEL=info
       # Uncomment to use env-only config (no file needed):
       # - VPN_REBIND_PROVIDER=gluetun
-      # - VPN_REBIND_DEPENDENTS=qbittorrent,prowlarr
+      # - VPN_REBIND_LABEL_SELECTOR=vpn.required=true,vpn.provider=gluetun
       # - VPN_REBIND_DELAY=5s
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     depends_on:
       - gluetun
 
