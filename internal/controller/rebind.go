@@ -146,6 +146,12 @@ func (r *Rebirder) rebindContainer(ctx context.Context, containerName, providerN
 	containerCfg := cloneContainerConfig(info.Config, hostCfg)
 	name := stripSlash(info.Name)
 
+	log.Debug("container config prepared",
+		"hostname", containerCfg.Hostname,
+		"domainname", containerCfg.Domainname,
+		"network_mode", hostCfg.NetworkMode,
+	)
+
 	// 2. Stop gracefully.
 	timeout := 10
 	if err := r.client.ContainerStop(ctx, info.ID, container.StopOptions{Timeout: &timeout}); err != nil {
