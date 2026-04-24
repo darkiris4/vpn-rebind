@@ -183,8 +183,8 @@ func (r *Rebirder) rebindContainer(ctx context.Context, containerName, providerN
 }
 
 // cloneContainerConfig returns a shallow copy of cfg. When the network mode is
-// container:*, Hostname and Domainname are cleared — Docker rejects those fields
-// when the container shares another container's network namespace.
+// container:*, fields that Docker rejects for shared-namespace containers are cleared:
+// Hostname, Domainname, and ExposedPorts (networking is owned by the provider).
 func cloneContainerConfig(cfg *container.Config, hc *container.HostConfig) *container.Config {
 	if cfg == nil {
 		return nil
@@ -193,6 +193,7 @@ func cloneContainerConfig(cfg *container.Config, hc *container.HostConfig) *cont
 	if hc != nil && strings.HasPrefix(string(hc.NetworkMode), "container:") {
 		copy.Hostname = ""
 		copy.Domainname = ""
+		copy.ExposedPorts = nil
 	}
 	return &copy
 }
@@ -207,10 +208,10 @@ func cloneHostConfig(hc *container.HostConfig, providerName string) *container.H
 	if hc == nil {
 		return nil
 	}
-	// Shallow copy — safe because we only modify NetworkMode.
 	copy := *hc
 	if strings.HasPrefix(string(copy.NetworkMode), "container:") {
 		copy.NetworkMode = container.NetworkMode("container:" + providerName)
+		copy.PortBindings = nil
 	}
 	return &copy
 }
